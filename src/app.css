@@ -1,0 +1,130 @@
+:root {
+	--bg: #faf9f5;
+	--sidebar: #f0eee6;
+	--surface: #ffffff;
+	--user: #ebe8dc;
+	--border: #e3e0d4;
+	--text: #1f1e1d;
+	--muted: #73726c;
+	--accent: #c15f3c;
+	--accent-text: #ffffff;
+	--danger: #b3261e;
+	--serif: ui-serif, 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
+	--sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+	color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg: #262624;
+		--sidebar: #1f1e1d;
+		--surface: #30302e;
+		--user: #3a3935;
+		--border: #3f3e3a;
+		--text: #ecebe4;
+		--muted: #9c9a92;
+		--accent: #d97757;
+		--danger: #f2897f;
+		color-scheme: dark;
+	}
+}
+
+* {
+	box-sizing: border-box;
+}
+html,
+body {
+	height: 100%;
+	margin: 0;
+}
+body {
+	background: var(--bg);
+	color: var(--text);
+	font-family: var(--sans);
+	line-height: 1.5;
+	-webkit-font-smoothing: antialiased;
+}
+button {
+	font: inherit;
+	color: inherit;
+}
+button.primary {
+	background: var(--accent);
+	color: var(--accent-text);
+	border: 0;
+	border-radius: 0.75rem;
+	padding: 0.7rem 1rem;
+	font-weight: 500;
+	cursor: pointer;
+}
+button.primary:disabled {
+	opacity: 0.6;
+	cursor: default;
+}
+:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+/* rendered markdown */
+.md > :first-child {
+	margin-top: 0;
+}
+.md > :last-child {
+	margin-bottom: 0;
+}
+.md p,
+.md ul,
+.md ol,
+.md pre,
+.md blockquote,
+.md table {
+	margin: 0.8em 0;
+}
+.md h1,
+.md h2,
+.md h3 {
+	font-family: var(--sans);
+	line-height: 1.3;
+	margin: 1.2em 0 0.4em;
+}
+.md code {
+	font-size: 0.875em;
+	background: var(--user);
+	border-radius: 0.3rem;
+	padding: 0.1em 0.35em;
+}
+.md pre {
+	background: var(--sidebar);
+	border: 1px solid var(--border);
+	border-radius: 0.75rem;
+	padding: 0.9rem 1rem;
+	overflow-x: auto;
+}
+.md pre code {
+	background: none;
+	padding: 0;
+}
+.md blockquote {
+	border-left: 3px solid var(--border);
+	padding-left: 1rem;
+	color: var(--muted);
+}
+.md table {
+	border-collapse: collapse;
+	display: block;
+	overflow-x: auto;
+}
+.md th,
+.md td {
+	border: 1px solid var(--border);
+	padding: 0.35rem 0.7rem;
+}
+.md a {
+	color: var(--accent);
+}
+@media (prefers-reduced-motion: reduce) {
+	* {
+		animation: none !important;
+		transition: none !important;
+	}
+}
