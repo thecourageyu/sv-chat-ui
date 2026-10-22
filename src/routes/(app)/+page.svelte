@@ -32,7 +32,9 @@
 <svelte:head><title>New chat</title></svelte:head>
 
 <section class="home">
-	<h1><span aria-hidden="true">✺</span> {greeting}, {data.user.email.split('@')[0]}</h1>
+	<!-- <h1><span aria-hidden="true">✺</span> {greeting}, {data.user.email.split('@')[0]}</h1> -->
+	<h1><span aria-hidden="true">☘</span> {greeting}, {data.user.email.split('@')[0]}</h1>
+	
 	<div class="box">
 		<Composer onsend={start} {busy} placeholder="What's on your mind?" />
 		{#if error}<p class="error" role="alert">{error}</p>{/if}

@@ -1,6 +1,7 @@
 import { error } from '@sveltejs/kit';
 import { getChat, getMessages, addMessage } from '$lib/server/db.js';
 import { streamReply } from '$lib/server/llm.js';
+import { retrieveMemories } from '$lib/server/memory.js';
 
 /**
  * Send a message and stream the model's reply as plain text.
@@ -26,7 +27,20 @@ export async function POST({ params, request, locals }) {
 		async start(controller) {
 			let full = '';
 			try {
-				for await (const chunk of streamReply(history, ac.signal)) {
+				let suffix = '';
+				try {
+					const lastUser = [...history].reverse().find((m) => m.role === 'user')?.content ?? '';
+					const memories = await retrieveMemories(locals.user.id, lastUser, 5);
+					if (memories.length) {
+						suffix =
+							'Relevant information you remember about the user (use it if helpful):\n' +
+							memories.map((m) => `- ${m.content}`).join('\n');
+					}
+				} catch {
+					// Memory retrieval is best-effort: never block a reply on it.
+				}
+
+				for await (const chunk of streamReply(history, ac.signal, { systemSuffix: suffix })) {
 					full += chunk;
 					if (!cancelled) controller.enqueue(enc.encode(chunk));
 				}

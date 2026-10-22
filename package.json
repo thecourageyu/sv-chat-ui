@@ -13,7 +13,8 @@
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^12.1.0",
     "dompurify": "^3.2.0",
-    "marked": "^14.1.0"
+    "marked": "^14.1.0",
+    "sqlite-vec": "^0.1.9"
   },
   "devDependencies": {
     "@sveltejs/adapter-node": "^5.2.0",
