@@ -9,17 +9,31 @@ const DEFAULT_SYSTEM = 'You are a helpful, concise assistant.';
  * Yields text chunks as they arrive.
  * @param {{role: 'user'|'assistant', content: string}[]} messages
  * @param {AbortSignal} [signal]
- * @param {{style?: 'anthropic'|'openai', systemSuffix?: string}} [options]
+ * @param {{style?: 'anthropic'|'openai', systemSuffix?: string, similarSummaries?: object[], rollingMemories?: string|null}} [options]
  */
-export async function* streamReply(messages, signal, { style, systemSuffix = '' } = {}) {
-	const apiStyle = (style ?? env.LLM_API ?? inferStyle()).toLowerCase();
-	if (apiStyle === 'openai') {
-		yield* streamOpenAI(messages, signal, systemSuffix);
-	} else if (apiStyle === 'anthropic') {
-		yield* streamAnthropic(messages, signal, systemSuffix);
+export async function* streamReply(
+	messages,
+	signal,
+	{ style, systemSuffix = '', similarSummaries = [], rollingMemories = null } = {}
+) {
+	const cfg = resolveConfig(style);
+	const extra = contextFields({ similarSummaries, rollingMemories });
+	if (cfg.style === 'openai') {
+		yield* streamOpenAI(messages, signal, systemSuffix, cfg, extra);
 	} else {
-		throw new Error(`Unknown LLM_API "${apiStyle}". Use "anthropic" or "openai".`);
+		yield* streamAnthropic(messages, signal, systemSuffix, cfg, extra);
 	}
+}
+
+/**
+ * Extra keys appended to the LLM request body so a gateway/proxy can rebuild the
+ * prompt from contextual data server-side. Kept out of `messages` on purpose.
+ */
+function contextFields({ similarSummaries = [], rollingMemories = null } = {}) {
+	return {
+		similar_summaries: similarSummaries,
+		rolling_summary: rollingMemories
+	};
 }
 
 function inferStyle() {
@@ -27,28 +41,81 @@ function inferStyle() {
 }
 
 /**
- * Non-streaming completion (used for summarisation / memory extraction).
- * Same style selection as streamReply, but returns the full text.
- * @param {{role: 'user'|'assistant'|'system', content: string}[]} messages
- * @param {{style?: 'anthropic'|'openai', maxTokens?: number, temperature?: number}} [options]
+ * Resolve connection config (style, model, baseUrl, apiKey) for one provider.
+ *
+ * The provider is selected by `style`, else `LLM_API`, else inferred from which
+ * keys are set. `prefix` (e.g. "MEMORY_") layers optional overrides on top of
+ * the selected provider's base config, so any field left unset by the override
+ * reuses the corresponding OPENAI_* / ANTHROPIC_* value.
+ *
+ *   base config (prefix="")           -> OPENAI_MODEL / ANTHROPIC_MODEL, etc.
+ *   override   (prefix="MEMORY_")     -> MEMORY_MODEL, MEMORY_BASE_URL, MEMORY_API_KEY
  */
-export async function complete(messages, { style, maxTokens = 1024, temperature = 0 } = {}) {
+function resolveConfig(style, prefix = 'LLM_') {
 	const apiStyle = (style ?? env.LLM_API ?? inferStyle()).toLowerCase();
+	// const apiStyle = (style ?? inferStyle()).toLowerCase();
+	const get = (name) => (prefix ? env[prefix + name] : undefined);
 
+	console.log(`>>> style: ${style}\n`);
 	if (apiStyle === 'openai') {
-		const base = (env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
-		if (!env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is not set on the server.');
+		return {
+			style: 'openai',
+			model: get('MODEL') ?? env.OPENAI_MODEL ?? 'gpt-4o-mini',
+			baseUrl: (get('BASE_URL') ?? env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/$/, ''),
+			apiKey: get('API_KEY') ?? env.OPENAI_API_KEY
+		};
+	}
+
+	if (apiStyle === 'anthropic') {
+		return {
+			style: 'anthropic',
+			model: get('MODEL') ?? env.ANTHROPIC_MODEL ?? 'claude-sonnet-5-5',
+			baseUrl: (get('BASE_URL') ?? env.ANTHROPIC_BASE_URL ?? 'https://api.anthropic.com').replace(/\/$/, ''),
+			apiKey: get('API_KEY') ?? env.ANTHROPIC_API_KEY
+		};
+	}
+
+	throw new Error(`Unknown LLM_API "${apiStyle}". Use "anthropic" or "openai".`);
+}
+
+/**
+ * Connection config for summarisation / memory extraction.
+ * Layers the MEMORY_* overrides over the chat LLM config; with no MEMORY_*
+ * vars set this is identical to the chat LLM.
+ */
+export function memoryCompleteOptions() {
+	return resolveConfig(env.MEMORY_API, 'MEMORY_');
+}
+
+/**
+ * Non-streaming completion (used for summarisation / memory extraction).
+ * Same config resolution as streamReply, but returns the full text.
+ * @param {{role: 'user'|'assistant'|'system', content: string}[]} messages
+ * @param {{style?: 'anthropic'|'openai', maxTokens?: number, temperature?: number, model?: string, baseUrl?: string, apiKey?: string, extra?: object}} [options]
+ */
+export async function complete(
+	messages,
+	{ style, maxTokens = 1024, temperature = env.LLM_TEMPERATURE == null ? 0 : Number(env.LLM_TEMPERATURE), model, baseUrl, apiKey, extra = {} } = {}
+) {
+	const cfg = resolveConfig(style);
+	const resolvedModel = model ?? cfg.model;
+	const base = (baseUrl ?? cfg.baseUrl).replace(/\/$/, '');
+	const key = apiKey ?? cfg.apiKey;
+
+	if (cfg.style === 'openai') {
+		if (!key) throw new Error('OPENAI_API_KEY is not set on the server.');
 		const res = await fetch(`${base}/chat/completions`, {
 			method: 'POST',
 			headers: {
 				'content-type': 'application/json',
-				authorization: `Bearer ${env.OPENAI_API_KEY}`
+				authorization: `Bearer ${key}`
 			},
 			body: JSON.stringify({
-				model: env.OPENAI_MODEL || 'gpt-4o-mini',
+				model: resolvedModel,
 				max_tokens: maxTokens,
 				temperature,
-				messages
+				messages,
+				...extra
 			})
 		});
 		await ensureOk(res);
@@ -56,32 +123,28 @@ export async function complete(messages, { style, maxTokens = 1024, temperature 
 		return json.choices?.[0]?.message?.content?.trim() ?? '';
 	}
 
-	if (apiStyle === 'anthropic') {
-		const base = (env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, '');
-		if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not set on the server.');
-		const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
-		const rest = messages.filter((m) => m.role !== 'system');
-		const res = await fetch(`${base}/v1/messages`, {
-			method: 'POST',
-			headers: {
-				'content-type': 'application/json',
-				'x-api-key': env.ANTHROPIC_API_KEY,
-				'anthropic-version': '2023-06-01'
-			},
-			body: JSON.stringify({
-				model: env.ANTHROPIC_MODEL || 'claude-sonnet-5-5',
-				max_tokens: maxTokens,
-				temperature,
-				system: system || undefined,
-				messages: rest
-			})
-		});
-		await ensureOk(res);
-		const json = await res.json();
-		return json.content?.filter((b) => b.type === 'text').map((b) => b.text).join('').trim() ?? '';
-	}
-
-	throw new Error(`Unknown LLM_API "${apiStyle}". Use "anthropic" or "openai".`);
+	if (!key) throw new Error('ANTHROPIC_API_KEY is not set on the server.');
+	const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
+	const rest = messages.filter((m) => m.role !== 'system');
+	const res = await fetch(`${base}/v1/messages`, {
+		method: 'POST',
+		headers: {
+			'content-type': 'application/json',
+			'x-api-key': key,
+			'anthropic-version': '2023-06-01'
+		},
+		body: JSON.stringify({
+			model: resolvedModel,
+			max_tokens: maxTokens,
+			temperature,
+			system: system || undefined,
+			messages: rest,
+			...extra
+		})
+	});
+	await ensureOk(res);
+	const json = await res.json();
+	return json.content?.filter((b) => b.type === 'text').map((b) => b.text).join('').trim() ?? '';
 }
 
 function systemPrompt(suffix = '') {
@@ -89,24 +152,24 @@ function systemPrompt(suffix = '') {
 	return suffix ? `${base}\n\n${suffix}` : base;
 }
 
-async function* streamAnthropic(messages, signal, systemSuffix = '') {
-	if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not set on the server.');
+async function* streamAnthropic(messages, signal, systemSuffix, cfg, extra = {}) {
+	if (!cfg.apiKey) throw new Error('ANTHROPIC_API_KEY is not set on the server.');
 
-	const base = (env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, '');
-	const res = await fetch(`${base}/v1/messages`, {
+	const res = await fetch(`${cfg.baseUrl}/v1/messages`, {
 		method: 'POST',
 		signal,
 		headers: {
 			'content-type': 'application/json',
-			'x-api-key': env.ANTHROPIC_API_KEY,
+			'x-api-key': cfg.apiKey,
 			'anthropic-version': '2023-06-01'
 		},
 		body: JSON.stringify({
-			model: env.ANTHROPIC_MODEL || 'claude-sonnet-5-5',
+			model: cfg.model,
 			max_tokens: 4096,
 			stream: true,
 			system: systemPrompt(systemSuffix),
-			messages
+			messages,
+			...extra
 		})
 	});
 
@@ -118,24 +181,24 @@ async function* streamAnthropic(messages, signal, systemSuffix = '') {
 	}
 }
 
-async function* streamOpenAI(messages, signal, systemSuffix = '') {
-	if (!env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is not set on the server.');
+async function* streamOpenAI(messages, signal, systemSuffix, cfg, extra = {}) {
+	if (!cfg.apiKey) throw new Error('OPENAI_API_KEY is not set on the server.');
 
-	const base = (env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
-	const res = await fetch(`${base}/chat/completions`, {
+	const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
 		method: 'POST',
 		signal,
 		headers: {
 			'content-type': 'application/json',
-			authorization: `Bearer ${env.OPENAI_API_KEY}`
+			authorization: `Bearer ${cfg.apiKey}`
 		},
 		body: JSON.stringify({
-			model: env.OPENAI_MODEL || 'gpt-4o-mini',
+			model: cfg.model,
 			stream: true,
 			messages: [
 				{ role: 'system', content: systemPrompt(systemSuffix) },
 				...messages
-			]
+			],
+			...extra
 		})
 	});
 

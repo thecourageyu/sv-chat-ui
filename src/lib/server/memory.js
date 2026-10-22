@@ -1,6 +1,14 @@
-import { complete } from './llm.js';
+import { complete, memoryCompleteOptions } from './llm.js';
 import { embedTexts } from './embeddings.js';
-import { saveSummary, saveMemory, searchMemories } from './db.js';
+import { saveSummary, saveMemory, searchMemories, searchSimilarSummaries, getLatestSummary } from './db.js';
+
+/** Extra body keys forwarded to the LLM for summarise / extract calls. */
+export function contextFields({ similarSummaries = [], memory = null } = {}) {
+	return {
+		similar_summaries: similarSummaries,
+		memory
+	};
+}
 
 /**
  * Chat summarisation + long-term memory extraction.
@@ -17,23 +25,29 @@ const CONTEXT_LIMIT = 16000;
  * Summarise a conversation into a single self-contained paragraph.
  * @param {{role: 'user'|'assistant', content: string}[]} messages
  */
-export async function summarizeChat(messages) {
+export async function summarizeChat(messages, context = {}) {
 	const transcript = messages
 		.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
 		.join('\n\n')
 		.slice(-CONTEXT_LIMIT);
 
-	const text = await complete([
+	const text = await complete(
+		[
+			{
+				role: 'system',
+				content:
+					'You produce concise, self-contained summaries of conversations. Preserve key facts, decisions, preferences, and anything worth remembering later. Write in third person, present tense, as plain statements.'
+			},
+			{
+				role: 'user',
+				content: `Summarise the following conversation into a single paragraph (at most ${SUMMARY_MAX} characters). Output only the summary.\n\n${transcript}`
+			}
+		],
 		{
-			role: 'system',
-			content:
-				'You produce concise, self-contained summaries of conversations. Preserve key facts, decisions, preferences, and anything worth remembering later. Write in third person, present tense, as plain statements.'
-		},
-		{
-			role: 'user',
-			content: `Summarise the following conversation into a single paragraph (at most ${SUMMARY_MAX} characters). Output only the summary.\n\n${transcript}`
+			...memoryCompleteOptions(),
+			extra: contextFields(context)
 		}
-	]);
+	);
 
 	return text.slice(0, SUMMARY_MAX);
 }
@@ -43,18 +57,24 @@ export async function summarizeChat(messages) {
  * Returns an array of short standalone statements (one per fact).
  * @param {string} summary
  */
-export async function extractMemories(summary) {
-	const text = await complete([
+export async function extractMemories(summary, context = {}) {
+	const text = await complete(
+		[
+			{
+				role: 'system',
+				content:
+					'You extract durable, long-term facts about a user from conversation summaries. Output each fact on its own line as a short standalone statement. Include only stable facts (identity, preferences, goals, constraints) — not transient details or anything already obvious from the conversation.'
+			},
+			{
+				role: 'user',
+				content: `Extract the long-term facts about the user from this summary. One per line, no bullets, no numbering.\n\n${summary}`
+			}
+		],
 		{
-			role: 'system',
-			content:
-				'You extract durable, long-term facts about a user from conversation summaries. Output each fact on its own line as a short standalone statement. Include only stable facts (identity, preferences, goals, constraints) — not transient details or anything already obvious from the conversation.'
-		},
-		{
-			role: 'user',
-			content: `Extract the long-term facts about the user from this summary. One per line, no bullets, no numbering.\n\n${summary}`
+			...memoryCompleteOptions(),
+			extra: contextFields(context)
 		}
-	]);
+	);
 
 	return text
 		.split('\n')
@@ -67,9 +87,10 @@ export async function extractMemories(summary) {
  * @param {{role: 'user'|'assistant', content: string}[]} messages
  * @param {number} userId
  * @param {string} chatId
+ * @param {{similarSummaries?: object[], memory?: object|null}} [context] - forwarded to the LLM
  */
-export async function summarizeAndStore(messages, userId, chatId) {
-	const summary = await summarizeChat(messages);
+export async function summarizeAndStore(messages, userId, chatId, context = {}) {
+	const summary = await summarizeChat(messages, context);
 	const [embedding] = await embedTexts([summary]);
 	const summaryId = saveSummary(userId, chatId, summary, 'chat', embedding);
 	return { summary, summaryId };
@@ -80,9 +101,10 @@ export async function summarizeAndStore(messages, userId, chatId) {
  * @param {string} text - a summary or transcript to mine for memories
  * @param {number} userId
  * @param {number|null} sourceSummaryId
+ * @param {{similarSummaries?: object[], memory?: object|null}} [context] - forwarded to the LLM
  */
-export async function extractAndStoreMemories(text, userId, sourceSummaryId = null) {
-	const facts = await extractMemories(text);
+export async function extractAndStoreMemories(text, userId, sourceSummaryId = null, context = {}) {
+	const facts = await extractMemories(text, context);
 	const memories = [];
 	for (const fact of facts) {
 		const [embedding] = await embedTexts([fact]);
@@ -107,4 +129,32 @@ export async function retrieveMemories(userId, query, limit = 5) {
 		content: row.content,
 		similarity: Math.max(0, 1 - row.distance / 2) // cosine distance 0..2 → 1..0
 	}));
+}
+
+/**
+ * Retrieve the most similar across-chat summaries for a query via cosine
+ * similarity. Returns [] when the query is blank or retrieval fails upstream.
+ */
+export async function retrieveSimilarSummaries(userId, query, limit = 10) {
+	if (!query.trim()) return [];
+	const [embedding] = await embedTexts([query]);
+	if (!embedding) return [];
+	return searchSimilarSummaries(userId, embedding, limit).map((row) => ({
+		id: row.id,
+		content: row.content,
+		similarity: Math.max(0, 1 - row.distance / 2) // cosine distance 0..2 → 1..0
+	}));
+}
+
+/**
+ * Build the context payload for a summarise/extract call: the 10 most similar
+ * summaries and the single most relevant memory for `query`. Best-effort —
+ * returns empty fields on any retrieval error.
+ * @param {number} userId
+ * @param {string} query
+ */
+export async function buildContext(userId, query) {
+	const similarSummaries = await retrieveSimilarSummaries(userId, query, 10).catch(() => []);
+	const memory = (await retrieveMemories(userId, query, 1).catch(() => []))[0] ?? null;
+	return { similarSummaries, memory };
 }

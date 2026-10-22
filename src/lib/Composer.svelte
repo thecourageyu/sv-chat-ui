@@ -18,7 +18,7 @@
 	function keydown(e) {
 		if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
 			e.preventDefault();
-			submit();
+			submit();  // 按 Enter 發送（但按 Shift+Enter 換行，且避開中文輸入法選字中的 Enter)
 		}
 	}
 </script>

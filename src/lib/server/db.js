@@ -74,18 +74,23 @@ CREATE INDEX IF NOT EXISTS memories_user ON memories(user_id, id);
 
 // Vector tables for the two features. Dimension is fixed at first creation; keep
 // EMBEDDING_DIM in .env consistent with your embedding model's output.
-const dim = Number(env.EMBEDDING_DIM || 1536);
+const dim = Number(env.EMBEDDING_DIM || 384);
 db.exec(`
 CREATE VIRTUAL TABLE IF NOT EXISTS summary_vec USING vec0(
 	summary_id INTEGER PRIMARY KEY,
+	user_id INTEGER,
 	embedding FLOAT[${dim}] distance_metric=cosine
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS memory_vec USING vec0(
+	memory_id INTEGER PRIMARY KEY,	
 	user_id INTEGER,
-	memory_id INTEGER PRIMARY KEY,
 	embedding FLOAT[${dim}] distance_metric=cosine
 );
 `);
+
+	// Summary vector tables created before user-scoped search lack `user_id`.
+	// Rebuild in place, back-filling user_id from chat_summaries (idempotent).
+	migrateSummaryVec(dim);
 
 export const listChats = (userId) =>
 	db.prepare('SELECT id, title, updated_at FROM chats WHERE user_id = ? ORDER BY updated_at DESC').all(userId);
@@ -104,6 +109,14 @@ export const deleteChat = (id, userId) =>
 
 export const getMessages = (chatId) =>
 	db.prepare('SELECT role, content FROM messages WHERE chat_id = ? ORDER BY id').all(chatId);
+
+/** Messages sent today (UTC) in a chat — the window the Summarise button acts on. */
+export const getMessagesInChatSince = (chatId, since) =>
+	db.prepare('SELECT role, content FROM messages WHERE chat_id = ? AND created_at >= ? ORDER BY id').all(chatId, since);
+
+/** The most recent user message in a chat (used as the context query). */
+export const getLastUserMessage = (chatId) =>
+	db.prepare("SELECT content FROM messages WHERE chat_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1").get(chatId)?.content ?? '';
 
 export function addMessage(chatId, role, content) {
 	db.prepare('INSERT INTO messages (chat_id, role, content) VALUES (?, ?, ?)').run(chatId, role, content);
@@ -132,6 +145,12 @@ export function getLatestSummary(userId, kind = 'chat', chatId = null) {
 		.prepare('SELECT id, content FROM chat_summaries WHERE user_id = ? AND kind = ? ORDER BY id DESC LIMIT 1')
 		.get(userId, kind);
 }
+
+/** Per-chat summaries of a user since a unix timestamp — input to Extract memories. */
+export const getSummariesSince = (userId, since) =>
+	db
+		.prepare('SELECT id, content FROM chat_summaries WHERE user_id = ? AND kind = ? AND created_at >= ? ORDER BY id DESC')
+		.all(userId, 'chat', since);
 
 // ---- Memories ----
 
@@ -169,9 +188,61 @@ export function searchMemories(userId, embedding, limit = 5) {
 		.all(JSON.stringify(embedding), BigInt(userId), limit);
 }
 
+/**
+ * KNN search over chat summaries for a user (used to surface similar past chats).
+ * "embedding" must be a number[]. Returns rows of { id, content, distance }.
+ */
+export function searchSimilarSummaries(userId, embedding, limit = 10) {
+	return db
+		.prepare(
+			`SELECT s.id, s.content, v.distance
+			 FROM summary_vec v
+			 JOIN chat_summaries s ON s.id = v.summary_id
+			 WHERE v.embedding MATCH ? AND v.user_id = ? AND k = ?
+			 ORDER BY v.distance`
+		)
+		.all(JSON.stringify(embedding), BigInt(userId), limit);
+}
+
 // ---- Vector helpers (embedding is a number[]) ----
 
+/**
+ * Rebuild summary_vec if it predates user-scoped search (no `user_id` column).
+ * Back-fills user_id from chat_summaries; a no-op once the column exists.
+ */
+function migrateSummaryVec(dim) {
+	const cols = db.prepare('PRAGMA table_info(summary_vec)').all();
+	if (cols.some((c) => c.name === 'user_id')) return;
+
+	// Capture existing rows (embedding as JSON) before dropping, since sqlite-vec
+	// virtual tables cannot be ALTERed and expose no portable column add.
+	const rows = db
+		.prepare(
+			`SELECT v.summary_id, s.user_id, vec_to_json(v.embedding) AS embedding
+			 FROM summary_vec v
+			 JOIN chat_summaries s ON s.id = v.summary_id`
+		)
+		.all();
+
+	db.exec('DROP TABLE summary_vec');
+	db.exec(
+		`CREATE VIRTUAL TABLE summary_vec USING vec0(
+			summary_id INTEGER PRIMARY KEY,
+			user_id INTEGER,
+			embedding FLOAT[${dim}] distance_metric=cosine
+		)`
+	);
+
+	const insert = db.prepare(
+		'INSERT INTO summary_vec (summary_id, user_id, embedding) VALUES (?, ?, ?)'
+	);
+	for (const row of rows) {
+		insert.run(BigInt(row.summary_id), BigInt(row.user_id), row.embedding);
+	}
+}
+
 function upsertSummaryVector(summaryId, embedding) {
+	console.log(`[db.js] upsertSummaryVector`);
 	const id = BigInt(summaryId);
 	const vec = JSON.stringify(embedding);
 	const existing = db.prepare('SELECT summary_id FROM summary_vec WHERE summary_id = ?').get(id);

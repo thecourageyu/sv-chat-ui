@@ -1,7 +1,7 @@
 import { error } from '@sveltejs/kit';
-import { getChat, getMessages, addMessage } from '$lib/server/db.js';
+import { getChat, getMessages, addMessage, getLatestSummary } from '$lib/server/db.js';
 import { streamReply } from '$lib/server/llm.js';
-import { retrieveMemories } from '$lib/server/memory.js';
+import { retrieveMemories, retrieveSimilarSummaries } from '$lib/server/memory.js';
 
 /**
  * Send a message and stream the model's reply as plain text.
@@ -28,6 +28,8 @@ export async function POST({ params, request, locals }) {
 			let full = '';
 			try {
 				let suffix = '';
+				let similarSummaries = [];
+				let rollingSummary = null;
 				try {
 					const lastUser = [...history].reverse().find((m) => m.role === 'user')?.content ?? '';
 					const memories = await retrieveMemories(locals.user.id, lastUser, 5);
@@ -36,11 +38,16 @@ export async function POST({ params, request, locals }) {
 							'Relevant information you remember about the user (use it if helpful):\n' +
 							memories.map((m) => `- ${m.content}`).join('\n');
 					}
+					// Passed to the LLM gateway as raw keys (not baked into the
+					// prompt here) so it can rebuild the context itself.
+					similarSummaries = await retrieveSimilarSummaries(locals.user.id, lastUser, 10);
+					const rolling = getLatestSummary(locals.user.id, 'rolling');
+					rollingSummary = rolling?.content ?? null;
 				} catch {
-					// Memory retrieval is best-effort: never block a reply on it.
+					// Context retrieval is best-effort: never block a reply on it.
 				}
 
-				for await (const chunk of streamReply(history, ac.signal, { systemSuffix: suffix })) {
+				for await (const chunk of streamReply(history, ac.signal, { systemSuffix: suffix, similarSummaries, rollingSummary })) {
 					full += chunk;
 					if (!cancelled) controller.enqueue(enc.encode(chunk));
 				}
