@@ -198,6 +198,9 @@ async function* streamOpenAI(messages, signal, systemSuffix, cfg, extra = {}) {
 				{ role: 'system', content: systemPrompt(systemSuffix) },
 				...messages
 			],
+			temperature: env.LLM_TEMPERATURE == null ? 0 : Number(env.LLM_TEMPERATURE),
+    		top_p: env.LLM_TOP_P == null ? 0.9 : Number(env.LLM_TOP_P),
+    		max_tokens: env.LLM_MAX_TOKENS == null ? 4096 : Number(env.LLM_MAX_TOKENS),
 			...extra
 		})
 	});

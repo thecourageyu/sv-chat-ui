@@ -36,7 +36,8 @@ export async function embedTexts(texts) {
 	const model = env.EMBEDDING_MODEL || '';
 	if (!model) throw new Error('EMBEDDING_MODEL is not set. Set it to your embedding model name.');
 
-	const res = await fetch(`${base}/v1/embeddings`, {
+	// const res = await fetch(`${base}/v1/embeddings`, {
+	const res = await fetch(`${base}/embeddings`, {
 		method: 'POST',
 		headers: {
 			'content-type': 'application/json',

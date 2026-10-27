@@ -101,8 +101,18 @@ export const createChat = (id, userId, title) =>
 export const renameChat = (id, userId, title) =>
 	db.prepare('UPDATE chats SET title = ? WHERE id = ? AND user_id = ?').run(title, id, userId);
 
-export const deleteChat = (id, userId) =>
+export function deleteChat(id, userId) {
+	// Remove summary vectors first (vec0 virtual tables have no FK cascade),
+	// then delete the chat — messages + chat_summaries cascade via FKs.
+	const summaryIds = db
+		.prepare('SELECT id FROM chat_summaries WHERE chat_id = ? AND user_id = ?')
+		.all(id, userId)
+		.map((r) => BigInt(r.id));
+	for (const sid of summaryIds) {
+		db.prepare('DELETE FROM summary_vec WHERE summary_id = ?').run(sid);
+	}
 	db.prepare('DELETE FROM chats WHERE id = ? AND user_id = ?').run(id, userId);
+}
 
 export const getMessages = (chatId) =>
 	db.prepare('SELECT role, content FROM messages WHERE chat_id = ? ORDER BY id').all(chatId);
@@ -151,6 +161,25 @@ export const getSummariesSince = (userId, since) =>
 	db
 		.prepare('SELECT id, content FROM chat_summaries WHERE user_id = ? AND kind = ? AND created_at >= ? ORDER BY id DESC')
 		.all(userId, 'chat', since);
+
+/** The most recent summaries for a user (all kinds) — for the Memory page list. */
+export const listSummaries = (userId, limit = 10) =>
+	db
+		.prepare('SELECT id, chat_id, kind, content, created_at FROM chat_summaries WHERE user_id = ? ORDER BY id DESC LIMIT ?')
+		.all(userId, limit);
+
+/** Delete one summary (and its vector row). Returns true when a row was removed. */
+export function deleteSummary(id, userId) {
+	const info = db
+		.prepare('DELETE FROM chat_summaries WHERE id = ? AND user_id = ?')
+		.run(id, userId);
+	if (info.changes > 0) {
+		db.prepare('DELETE FROM summary_vec WHERE summary_id = ?').run(BigInt(id));
+		// Memories derived from this summary keep existing but lose the link.
+		db.prepare('UPDATE memories SET source_summary_id = NULL WHERE source_summary_id = ?').run(id);
+	}
+	return info.changes > 0;
+}
 
 // ---- Memories ----
 
