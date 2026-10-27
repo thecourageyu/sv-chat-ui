@@ -9,15 +9,15 @@ const DEFAULT_SYSTEM = 'You are a helpful, concise assistant.';
  * Yields text chunks as they arrive.
  * @param {{role: 'user'|'assistant', content: string}[]} messages
  * @param {AbortSignal} [signal]
- * @param {{style?: 'anthropic'|'openai', systemSuffix?: string, similarSummaries?: object[], rollingMemories?: string|null}} [options]
+ * @param {{style?: 'anthropic'|'openai', systemSuffix?: string, similarSummaries?: object[], rollingMemory?: string|null}} [options]
  */
 export async function* streamReply(
 	messages,
 	signal,
-	{ style, systemSuffix = '', similarSummaries = [], rollingMemories = null } = {}
+	{ style, systemSuffix = '', similarSummaries = [], rollingMemory = null } = {}
 ) {
 	const cfg = resolveConfig(style);
-	const extra = contextFields({ similarSummaries, rollingMemories });
+	const extra = contextFields({ similarSummaries, rollingMemory });
 	if (cfg.style === 'openai') {
 		yield* streamOpenAI(messages, signal, systemSuffix, cfg, extra);
 	} else {
@@ -29,10 +29,10 @@ export async function* streamReply(
  * Extra keys appended to the LLM request body so a gateway/proxy can rebuild the
  * prompt from contextual data server-side. Kept out of `messages` on purpose.
  */
-function contextFields({ similarSummaries = [], rollingMemories = null } = {}) {
+function contextFields({ similarSummaries = [], rollingMemory = null } = {}) {
 	return {
 		similar_summaries: similarSummaries,
-		rolling_summary: rollingMemories
+		rolling_memory: rollingMemory
 	};
 }
 

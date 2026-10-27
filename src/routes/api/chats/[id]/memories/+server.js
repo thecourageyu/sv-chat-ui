@@ -1,5 +1,5 @@
 import { json, error } from '@sveltejs/kit';
-import { getChat, getSummariesSince, getLastUserMessage } from '$lib/server/db.js';
+import { getChat, getSummariesSince, getLastUserMessage, getLatestNSummaries } from '$lib/server/db.js';
 import { extractAndStoreMemories, buildContext } from '$lib/server/memory.js';
 
 const DAY = 24 * 60 * 60;
@@ -16,12 +16,14 @@ export async function POST({ params, locals }) {
 	if (!chat) error(404, 'Chat not found');
 
 	const since = Math.floor(Date.now() / 1000) - 7 * DAY;
-	const summaries = getSummariesSince(locals.user.id, since);
+	// const summaries = getSummariesSince(locals.user.id, since);
+	const summaries = getLatestNSummaries(locals.user.id, 7);
 	if (!summaries.length) error(400, 'No chat summaries for this user in the last 7 days.');
 
 	const text = summaries.map((s) => s.content).join('\n\n');
 
-	const context = await buildContext(locals.user.id, getLastUserMessage(chat.id));
+	// const context = await buildContext(locals.user.id, getLastUserMessage(chat.id));
+	const context = await buildContext(locals.user.id, 7); // fetch the latest 7 summaries and the latest memory
 	const memories = await extractAndStoreMemories(text, locals.user.id, null, context);
 	return json({ memories }, { status: 201 });
 }

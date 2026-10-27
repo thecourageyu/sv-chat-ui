@@ -17,9 +17,11 @@ export async function POST({ params, locals }) {
 	const now = new Date();
 	const since = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) / 1000;
 	const messages = getMessagesInChatSince(chat.id, since);
+	console.log('[summarize.+server] messages:\n', messages);
 	if (!messages.length) error(400, 'Nothing to summarise in this chat for today.');
 
-	const context = await buildContext(locals.user.id, getLastUserMessage(chat.id));
+	// const context = await buildContext(locals.user.id, getLastUserMessage(chat.id));
+	const context = await buildContext(locals.user.id, 7); // fetch the latest 7 summaries and the latest memory
 	const result = await summarizeAndStore(messages, locals.user.id, chat.id, context);
 	return json(result, { status: 201 });
 }

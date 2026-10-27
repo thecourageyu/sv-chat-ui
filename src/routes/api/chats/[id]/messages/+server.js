@@ -1,7 +1,9 @@
 import { error } from '@sveltejs/kit';
 import { getChat, getMessages, addMessage, getLatestSummary } from '$lib/server/db.js';
 import { streamReply } from '$lib/server/llm.js';
-import { retrieveMemories, retrieveSimilarSummaries } from '$lib/server/memory.js';
+import { getLatestMemory } from '$lib/server/db.js';
+// import { retrieveMemories, retrieveSimilarSummaries, retrieveLatestMemories } from '$lib/server/memory.js';
+import { retrieveSimilarSummaries } from '$lib/server/memory.js';
 
 /**
  * Send a message and stream the model's reply as plain text.
@@ -29,25 +31,34 @@ export async function POST({ params, request, locals }) {
 			try {
 				let suffix = '';
 				let similarSummaries = [];
-				let rollingSummary = null;
+				let rollingMemory = null;
 				try {
 					const lastUser = [...history].reverse().find((m) => m.role === 'user')?.content ?? '';
-					const memories = await retrieveMemories(locals.user.id, lastUser, 5);
-					if (memories.length) {
-						suffix =
-							'Relevant information you remember about the user (use it if helpful):\n' +
-							memories.map((m) => `- ${m.content}`).join('\n');
-					}
+					// const memories = await retrieveMemories(locals.user.id, lastUser, 5);
+					// if (memories.length) {
+					// 	suffix =
+					// 		'Relevant information you remember about the user (use it if helpful):\n' +
+					// 		memories.map((m) => `- ${m.content}`).join('\n');
+					// }
+
 					// Passed to the LLM gateway as raw keys (not baked into the
 					// prompt here) so it can rebuild the context itself.
 					similarSummaries = await retrieveSimilarSummaries(locals.user.id, lastUser, 10);
-					const rolling = getLatestSummary(locals.user.id, 'rolling');
-					rollingSummary = rolling?.content ?? null;
-				} catch {
+					// const rolling = getLatestSummary(locals.user.id, 'rolling');
+					// rollingMemory = rolling?.content ?? null;
+
+					rollingMemory = await getLatestMemory(locals.user.id);
+
+				} catch (err){
 					// Context retrieval is best-effort: never block a reply on it.
+					console.error('[server.js] Error details:', err);
+					console.error('Failed to retrieve memories or summaries for context:\n(1) similarSummaries:\n', similarSummaries);
+					console.error('\n(2) rollingMemory:\n', rollingMemory);
+					
 				}
 
-				for await (const chunk of streamReply(history, ac.signal, { systemSuffix: suffix, similarSummaries, rollingSummary })) {
+				// for await (const chunk of streamReply(history, ac.signal, { systemSuffix: suffix, similarSummaries, rollingMemory })) {
+				for await (const chunk of streamReply(history, ac.signal, { systemSuffix: suffix, similarSummaries, rollingMemory })) {
 					full += chunk;
 					if (!cancelled) controller.enqueue(enc.encode(chunk));
 				}

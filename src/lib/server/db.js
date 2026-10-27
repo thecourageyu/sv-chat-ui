@@ -3,6 +3,7 @@ import * as vec from 'sqlite-vec';
 import { env } from '$env/dynamic/private';
 import fs from 'node:fs';
 import path from 'node:path';
+import { disableScrollHandling } from '$app/navigation';
 
 const file = env.DB_PATH || 'data/app.db';
 fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -14,7 +15,7 @@ db.pragma('foreign_keys = ON');
 // Load the sqlite-vec extension (vector search). Ignore errors on reload.
 try {
 	vec.load(db);
-} catch {}
+} catch { }
 
 // sessions: verify user login 
 // chats: store conversations of a user
@@ -51,11 +52,11 @@ CREATE INDEX IF NOT EXISTS messages_chat ON messages(chat_id, id);
 
 -- Chat summaries: rolling or per-chat summaries. The "kind" column allows both a
 -- rolling ('rolling') summary and per-conversation ('chat') summaries to coexist.
+-- kind TEXT NOT NULL DEFAULT 'chat' CHECK (kind IN ('rolling', 'chat')),
 CREATE TABLE IF NOT EXISTS chat_summaries (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 	chat_id TEXT REFERENCES chats(id) ON DELETE CASCADE,
-	kind TEXT NOT NULL DEFAULT 'chat' CHECK (kind IN ('rolling', 'chat')),
 	content TEXT NOT NULL,
 	created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
@@ -87,10 +88,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_vec USING vec0(
 	embedding FLOAT[${dim}] distance_metric=cosine
 );
 `);
-
-	// Summary vector tables created before user-scoped search lack `user_id`.
-	// Rebuild in place, back-filling user_id from chat_summaries (idempotent).
-	migrateSummaryVec(dim);
 
 export const listChats = (userId) =>
 	db.prepare('SELECT id, title, updated_at FROM chats WHERE user_id = ? ORDER BY updated_at DESC').all(userId);
@@ -125,25 +122,28 @@ export function addMessage(chatId, role, content) {
 
 // ---- Summaries ----
 
-export function saveSummary(userId, chatId, content, kind = 'chat', embedding = null) {
-	const chatIdOrNull = kind === 'chat' ? chatId : null;
+// export function saveSummary(userId, chatId, content, kind = 'chat', embedding = null) {
+export function saveSummary(userId, chatId, content, embedding = null) {
+	// const chatIdOrNull = kind === 'chat' ? chatId : null;
 	const info = db
-		.prepare('INSERT INTO chat_summaries (user_id, chat_id, kind, content) VALUES (?, ?, ?, ?)')
-		.run(userId, chatIdOrNull, kind, content);
+		.prepare('INSERT INTO chat_summaries (user_id, chat_id, content) VALUES (?, ?, ?)')
+		.run(userId, chatId, content);
+		// .run(userId, chatIdOrNull, content);
 	const id = Number(info.lastInsertRowid);
-	if (embedding) upsertSummaryVector(id, embedding);
+	if (embedding) upsertSummaryVector(id, userId, embedding);
 	return id;
 }
 
-export function getLatestSummary(userId, kind = 'chat', chatId = null) {
-	if (kind === 'chat') {
-		return db
-			.prepare('SELECT id, content FROM chat_summaries WHERE user_id = ? AND chat_id = ? AND kind = ? ORDER BY id DESC LIMIT 1')
-			.get(userId, chatId, kind);
-	}
+export function getLatestNSummaries(userId, n = 7) {
+// export function getLatestSummary(userId, kind = 'chat', chatId = null) {
+	// if (kind === 'chat') {
+	// 	return db
+	// 		.prepare('SELECT id, content FROM chat_summaries WHERE user_id = ? AND chat_id = ? AND kind = ? ORDER BY id DESC LIMIT 1')
+	// 		.get(userId, chatId, kind);
+	// }
 	return db
-		.prepare('SELECT id, content FROM chat_summaries WHERE user_id = ? AND kind = ? ORDER BY id DESC LIMIT 1')
-		.get(userId, kind);
+		.prepare('SELECT id, content FROM chat_summaries WHERE user_id = ? ORDER BY created_at DESC LIMIT ?')
+		.all(userId, n) ?? [];
 }
 
 /** Per-chat summaries of a user since a unix timestamp — input to Extract memories. */
@@ -161,6 +161,13 @@ export function saveMemory(userId, content, sourceSummaryId = null, embedding = 
 	const id = Number(info.lastInsertRowid);
 	if (embedding) upsertMemoryVector(userId, id, embedding);
 	return id;
+}
+
+
+export function getLatestMemory(userId) {
+	return db
+		.prepare('SELECT content FROM memories WHERE user_id = ? ORDER BY created_at DESC LIMIT 1')
+		.get(userId) ?? null;
 }
 
 export function listMemories(userId, limit = 100) {
@@ -206,50 +213,15 @@ export function searchSimilarSummaries(userId, embedding, limit = 10) {
 
 // ---- Vector helpers (embedding is a number[]) ----
 
-/**
- * Rebuild summary_vec if it predates user-scoped search (no `user_id` column).
- * Back-fills user_id from chat_summaries; a no-op once the column exists.
- */
-function migrateSummaryVec(dim) {
-	const cols = db.prepare('PRAGMA table_info(summary_vec)').all();
-	if (cols.some((c) => c.name === 'user_id')) return;
-
-	// Capture existing rows (embedding as JSON) before dropping, since sqlite-vec
-	// virtual tables cannot be ALTERed and expose no portable column add.
-	const rows = db
-		.prepare(
-			`SELECT v.summary_id, s.user_id, vec_to_json(v.embedding) AS embedding
-			 FROM summary_vec v
-			 JOIN chat_summaries s ON s.id = v.summary_id`
-		)
-		.all();
-
-	db.exec('DROP TABLE summary_vec');
-	db.exec(
-		`CREATE VIRTUAL TABLE summary_vec USING vec0(
-			summary_id INTEGER PRIMARY KEY,
-			user_id INTEGER,
-			embedding FLOAT[${dim}] distance_metric=cosine
-		)`
-	);
-
-	const insert = db.prepare(
-		'INSERT INTO summary_vec (summary_id, user_id, embedding) VALUES (?, ?, ?)'
-	);
-	for (const row of rows) {
-		insert.run(BigInt(row.summary_id), BigInt(row.user_id), row.embedding);
-	}
-}
-
-function upsertSummaryVector(summaryId, embedding) {
-	console.log(`[db.js] upsertSummaryVector`);
+function upsertSummaryVector(summaryId, userId, embedding) {
+	console.log(`[db.js] upsertSummaryVector summaryId=${summaryId} userId=${userId} embedding.length=${embedding.length}`);
 	const id = BigInt(summaryId);
 	const vec = JSON.stringify(embedding);
 	const existing = db.prepare('SELECT summary_id FROM summary_vec WHERE summary_id = ?').get(id);
 	if (existing) {
 		db.prepare('UPDATE summary_vec SET embedding = ? WHERE summary_id = ?').run(vec, id);
 	} else {
-		db.prepare('INSERT INTO summary_vec (summary_id, embedding) VALUES (?, ?)').run(id, vec);
+		db.prepare('INSERT INTO summary_vec (summary_id, user_id, embedding) VALUES (?, ?, ?)').run(id, BigInt(userId), vec);
 	}
 }
 

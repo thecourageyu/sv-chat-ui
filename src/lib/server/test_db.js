@@ -33,12 +33,12 @@ console.log(tables.map(t => t.name));
 // ==========================================
 // 如果你想手動清除 summary_vec 與 memory_vec，可以解除下方註解執行：
 
-console.log("\正在刪除舊的向量虛擬表格...");
-db.exec(`
-    DROP TABLE IF EXISTS summary_vec;
-    DROP TABLE IF EXISTS memory_vec;
-`);
-console.log("已成功刪除 summary_vec 與 memory_vec！");
+// console.log("\正在刪除舊的向量虛擬表格...");
+// db.exec(`
+//     DROP TABLE IF EXISTS summary_vec;
+//     DROP TABLE IF EXISTS memory_vec;
+// `);
+// console.log("已成功刪除 summary_vec 與 memory_vec！");
 
 
 // ==========================================
@@ -59,6 +59,22 @@ db.exec(`
 `);
 console.log(`已成功重建維度為 ${dim} 的向量虛擬表格！`);
 */
+
+// ==========================================
+// 測試：列出 users 資料表的內容
+// ==========================================
+console.log("\n--- users 資料表內容 ---");
+const users = db.prepare("SELECT * FROM users;").all();
+console.log(users);
+
+
+// ==========================================
+// 測試：列出 memories 資料表的內容
+// ==========================================
+console.log("\n--- memories 資料表內容 ---");
+const memories = db.prepare("SELECT * FROM memories;").all();
+console.log(memories);
+
 
 // 關閉連線
 db.close();
