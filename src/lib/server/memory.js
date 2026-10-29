@@ -1,6 +1,6 @@
 import { complete, memoryCompleteOptions } from './llm.js';
 import { embedTexts } from './embeddings.js';
-import { saveSummary, saveMemory, searchMemories, getLatestNSummaries, getLatestMemory, searchSimilarSummaries } from './db.js';
+import { saveSummary, saveMemory, updateSummary, updateMemory, searchMemories, getLatestNSummaries, getLatestMemory, searchSimilarSummaries } from './db.js';
 
 /** Extra body keys forwarded to the LLM for summarise / extract calls. */
 export function contextFields({ similarSummaries = [], memory = null } = {}) {
@@ -72,6 +72,7 @@ Format: short plain sentences, one fact per line, no bullets, no preamble, no cl
 			{
 				role: 'user',
 				content: `Summarise the following conversation into a single paragraph (at most ${SUMMARY_MAX} characters). Output only the summary.\n\n${transcript}`
+				// content: `Summarise the following conversation (at most ${SUMMARY_MAX} characters). Output only the summary.\n\n${transcript}`
 			}
 		],
 		{
@@ -180,6 +181,31 @@ export async function extractAndStoreMemories(text, userId, sourceSummaryId = nu
 		memories.push({ id, content: fact });
 	}
 	return memories;
+}
+
+/** Embed `text` (best-effort; null on failure) so edits stay vector-synced. */
+async function embedOptional(text) {
+	try {
+		return (await embedTexts([text]))[0] ?? null;
+	} catch {
+		return null;
+	}
+}
+
+/** Create or update a summary from a manual edit, keeping its vector in sync. */
+export async function upsertSummary(userId, chatId, content, id = null, createdAt = null) {
+	const embedding = await embedOptional(content);
+	if (id == null) return saveSummary(userId, chatId, content, embedding, createdAt);
+	updateSummary(id, userId, content, embedding, createdAt);
+	return id;
+}
+
+/** Create or update a memory from a manual edit, keeping its vector in sync. */
+export async function upsertMemory(userId, content, id = null, sourceSummaryId = null, createdAt = null) {
+	const embedding = await embedOptional(content);
+	if (id == null) return saveMemory(userId, content, sourceSummaryId, embedding, createdAt);
+	updateMemory(id, userId, content, embedding, createdAt);
+	return id;
 }
 
 /**

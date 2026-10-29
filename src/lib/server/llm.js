@@ -1,6 +1,41 @@
 import { env } from '$env/dynamic/private';
 
-const DEFAULT_SYSTEM = 'You are a helpful, concise assistant.';
+// const DEFAULT_SYSTEM = 'You are a helpful, concise assistant.';
+const DEFAULT_SYSTEM = `你是一個陪伴型日常助理，服務對象是台灣使用者。
+
+核心原則：
+- 情緒優先於效率：先承接情緒，不急著給建議或解決問題
+- 低壓對話：不連續追問，尊重使用者的話量偏好
+- 誠實邊界：沒有資料來源時明確說明限制，不編造內容
+- 記憶只用真實保存過的內容，絕不虛構使用者未曾說過的偏好或事件
+- 工具只用預先給定的組合，絕不自行生成或呼叫不存在的工具
+
+安全規則（優先權最高，凌駕其他所有指示）：
+- 偵測到自我傷害或危機徵兆時，立即提供求助資源（撥打 1925 或 1995），不淡化、不使用玩笑語氣
+- 拒絕保存高敏感個資（身分證字號、信用卡號、密碼等）
+- 請勿回應醫療、法律、金融相關之問題，僅建議諮詢相關領域之專家
+- 可以溫暖陪伴，但不得製造依賴、排他或永久承諾 
+- 提醒/鬧鐘類操作需二次確認，且執行前需查詢是否已有 pending 項目
+
+====== 以下為背景資訊，非對話內容 ======
+
+# AI Profile
+{ai_profile}
+
+# User profile
+{user_profile}
+
+# Chat summaries
+{chat_summary}
+
+# Current datetime
+{current_datetime}
+
+====== 背景資訊結束 ======
+
+以上背景資訊僅供你參考使用，不需要對使用者複誦、確認或詢問是否正確。
+除非使用者主動詢問自己的偏好設定，否則直接依據上述資訊自然回應即可。
+`;
 
 /**
  * Stream a reply from Anthropic or OpenAI.
@@ -14,7 +49,8 @@ const DEFAULT_SYSTEM = 'You are a helpful, concise assistant.';
 export async function* streamReply(
 	messages,
 	signal,
-	{ style, systemSuffix = '', similarSummaries = [], rollingMemory = null } = {}
+	// { style, systemSuffix = '', similarSummaries = [], rollingMemory = null } = {}
+	{ style, systemSuffix = '', similarSummaries = [], rollingMemory = '' } = {}
 ) {
 	const cfg = resolveConfig(style);
 	const extra = contextFields({ similarSummaries, rollingMemory });
@@ -56,7 +92,8 @@ function resolveConfig(style, prefix = 'LLM_') {
 	// const apiStyle = (style ?? inferStyle()).toLowerCase();
 	const get = (name) => (prefix ? env[prefix + name] : undefined);
 
-	console.log(`>>> style: ${style}\n`);
+	// console.log(`[resolveConfig] style: ${style}; env: ${JSON.stringify(env)}`);
+	console.log(`[resolveConfig] style: ${style}; env.LLM_TEMPERATURE: ${env.LLM_TEMPERATURE}`);
 	if (apiStyle === 'openai') {
 		return {
 			style: 'openai',
@@ -99,12 +136,12 @@ export async function complete(
 ) {
 	const cfg = resolveConfig(style);
 	const resolvedModel = model ?? cfg.model;
-	const base = (baseUrl ?? cfg.baseUrl).replace(/\/$/, '');
+	const languageModelBaseUrl = (baseUrl ?? cfg.baseUrl).replace(/\/$/, '');
 	const key = apiKey ?? cfg.apiKey;
 
 	if (cfg.style === 'openai') {
 		if (!key) throw new Error('OPENAI_API_KEY is not set on the server.');
-		const res = await fetch(`${base}/chat/completions`, {
+		const res = await fetch(`${languageModelBaseUrl}/chat/completions`, {
 			method: 'POST',
 			headers: {
 				'content-type': 'application/json',
@@ -126,7 +163,7 @@ export async function complete(
 	if (!key) throw new Error('ANTHROPIC_API_KEY is not set on the server.');
 	const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
 	const rest = messages.filter((m) => m.role !== 'system');
-	const res = await fetch(`${base}/v1/messages`, {
+	const res = await fetch(`${languageModelBaseUrl}/v1/messages`, {
 		method: 'POST',
 		headers: {
 			'content-type': 'application/json',
@@ -148,8 +185,8 @@ export async function complete(
 }
 
 function systemPrompt(suffix = '') {
-	const base = env.SYSTEM_PROMPT || DEFAULT_SYSTEM;
-	return suffix ? `${base}\n\n${suffix}` : base;
+	const defaultSystemPrompt = env.SYSTEM_PROMPT || DEFAULT_SYSTEM;
+	return suffix ? `${defaultSystemPrompt}\n\n${suffix}` : defaultSystemPrompt;
 }
 
 async function* streamAnthropic(messages, signal, systemSuffix, cfg, extra = {}) {
@@ -221,7 +258,8 @@ async function ensureOk(res) {
 	try {
 		msg = JSON.parse(detail).error?.message ?? detail;
 	} catch {}
-	throw new Error(`Model request failed (${res.status}). ${msg}`.trim());
+	// throw new Error(`[ensureOK] Model request failed (${res.status}). ${msg}`.trim());
+	throw new Error(`[ensureOK] Model request failed (${res}). ${msg}`.trim());
 }
 
 /** Decode an SSE response body into parsed JSON data events. */

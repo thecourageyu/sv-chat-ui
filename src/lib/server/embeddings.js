@@ -31,13 +31,13 @@ export async function embedTexts(texts) {
 	if (!Array.isArray(texts) || texts.length === 0) return [];
 
 	const key = env.EMBEDDING_API_KEY;
-	const base = (env.EMBEDDING_BASE_URL || '').replace(/\/+$/, '');
-	if (!base) throw new Error('EMBEDDING_BASE_URL is not set. Point it at your embedding API.');
+	const baseEmbeddingURL = (env.EMBEDDING_BASE_URL || '').replace(/\/+$/, '');
+	if (!baseEmbeddingURL) throw new Error('EMBEDDING_BASE_URL is not set. Point it at your embedding API.');
 	const model = env.EMBEDDING_MODEL || '';
 	if (!model) throw new Error('EMBEDDING_MODEL is not set. Set it to your embedding model name.');
 
-	// const res = await fetch(`${base}/v1/embeddings`, {
-	const res = await fetch(`${base}/embeddings`, {
+	// const res = await fetch(`${baseEmbeddingURL}/v1/embeddings`, {
+	const res = await fetch(`${baseEmbeddingURL}/embeddings`, {
 		method: 'POST',
 		headers: {
 			'content-type': 'application/json',

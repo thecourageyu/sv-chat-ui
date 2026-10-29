@@ -1,4 +1,5 @@
 <script>
+	import { base } from '$app/paths';
 	import { onMount, tick } from 'svelte';
 	import { invalidateAll } from '$app/navigation';
 	import Composer from './Composer.svelte';
@@ -28,7 +29,7 @@
 
 		controller = new AbortController();
 		try {
-			const res = await fetch(`/api/chats/${chatId}/messages`, {
+			const res = await fetch(`${base}/api/chats/${chatId}/messages`, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ content }),

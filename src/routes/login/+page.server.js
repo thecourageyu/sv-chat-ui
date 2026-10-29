@@ -1,3 +1,4 @@
+import { base } from '$app/paths';
 import { fail, redirect } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { createUser, verifyUser, startSession } from '$lib/server/auth.js';
@@ -18,7 +19,8 @@ export const actions = {
 		const id = verifyUser(email, password);
 		if (!id) return fail(400, { mode: 'login', email, message: 'Email or password is incorrect.' });
 		startSession(id, cookies, url);
-		redirect(303, '/');
+		// redirect(303, '/');
+		redirect(303, `${base}/`);
 	},
 
 	register: async ({ request, cookies, url }) => {
@@ -38,6 +40,7 @@ export const actions = {
 			throw e;
 		}
 		startSession(id, cookies, url);
-		redirect(303, '/');
+		// redirect(303, '/');
+		redirect(303, `${base}/`);
 	}
 };

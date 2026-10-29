@@ -133,11 +133,11 @@ export function addMessage(chatId, role, content) {
 // ---- Summaries ----
 
 // export function saveSummary(userId, chatId, content, kind = 'chat', embedding = null) {
-export function saveSummary(userId, chatId, content, embedding = null) {
+export function saveSummary(userId, chatId, content, embedding = null, createdAt = null) {
 	// const chatIdOrNull = kind === 'chat' ? chatId : null;
 	const info = db
-		.prepare('INSERT INTO chat_summaries (user_id, chat_id, content) VALUES (?, ?, ?)')
-		.run(userId, chatId, content);
+		.prepare('INSERT INTO chat_summaries (user_id, chat_id, content, created_at) VALUES (?, ?, ?, ?)')
+		.run(userId, chatId, content, createdAt ?? Math.floor(Date.now() / 1000));
 		// .run(userId, chatIdOrNull, content);
 	const id = Number(info.lastInsertRowid);
 	if (embedding) upsertSummaryVector(id, userId, embedding);
@@ -159,14 +159,29 @@ export function getLatestNSummaries(userId, n = 7) {
 /** Per-chat summaries of a user since a unix timestamp — input to Extract memories. */
 export const getSummariesSince = (userId, since) =>
 	db
-		.prepare('SELECT id, content FROM chat_summaries WHERE user_id = ? AND kind = ? AND created_at >= ? ORDER BY id DESC')
-		.all(userId, 'chat', since);
+		.prepare('SELECT id, content FROM chat_summaries WHERE user_id = ? AND created_at >= ? ORDER BY id DESC')
+		.all(userId, since);
 
 /** The most recent summaries for a user (all kinds) — for the Memory page list. */
 export const listSummaries = (userId, limit = 10) =>
 	db
-		.prepare('SELECT id, chat_id, kind, content, created_at FROM chat_summaries WHERE user_id = ? ORDER BY id DESC LIMIT ?')
+		.prepare('SELECT id, chat_id, content, created_at FROM chat_summaries WHERE user_id = ? ORDER BY id DESC LIMIT ?')
 		.all(userId, limit);
+
+export const getSummary = (id, userId) =>
+	db.prepare('SELECT id, chat_id, content, created_at FROM chat_summaries WHERE id = ? AND user_id = ?').get(id, userId);
+
+/** Update a summary's content/created_at (and re-index its vector). Returns true when updated. */
+export function updateSummary(id, userId, content, embedding = null, createdAt = null) {
+	const info = createdAt == null
+		? db.prepare('UPDATE chat_summaries SET content = ? WHERE id = ? AND user_id = ?').run(content, id, userId)
+		: db.prepare('UPDATE chat_summaries SET content = ?, created_at = ? WHERE id = ? AND user_id = ?').run(content, createdAt, id, userId);
+	if (info.changes > 0) {
+		if (embedding) upsertSummaryVector(id, userId, embedding);
+		else db.prepare('DELETE FROM summary_vec WHERE summary_id = ?').run(BigInt(id));
+	}
+	return info.changes > 0;
+}
 
 /** Delete one summary (and its vector row). Returns true when a row was removed. */
 export function deleteSummary(id, userId) {
@@ -183,13 +198,28 @@ export function deleteSummary(id, userId) {
 
 // ---- Memories ----
 
-export function saveMemory(userId, content, sourceSummaryId = null, embedding = null) {
+export function saveMemory(userId, content, sourceSummaryId = null, embedding = null, createdAt = null) {
 	const info = db
-		.prepare('INSERT INTO memories (user_id, content, source_summary_id) VALUES (?, ?, ?)')
-		.run(userId, content, sourceSummaryId);
+		.prepare('INSERT INTO memories (user_id, content, source_summary_id, created_at) VALUES (?, ?, ?, ?)')
+		.run(userId, content, sourceSummaryId, createdAt ?? Math.floor(Date.now() / 1000));
 	const id = Number(info.lastInsertRowid);
 	if (embedding) upsertMemoryVector(userId, id, embedding);
 	return id;
+}
+
+export const getMemory = (id, userId) =>
+	db.prepare('SELECT id, content, source_summary_id, created_at FROM memories WHERE id = ? AND user_id = ?').get(id, userId);
+
+/** Update a memory's content/created_at (and re-index its vector). Returns true when updated. */
+export function updateMemory(id, userId, content, embedding = null, createdAt = null) {
+	const info = createdAt == null
+		? db.prepare('UPDATE memories SET content = ? WHERE id = ? AND user_id = ?').run(content, id, userId)
+		: db.prepare('UPDATE memories SET content = ?, created_at = ? WHERE id = ? AND user_id = ?').run(content, createdAt, id, userId);
+	if (info.changes > 0) {
+		if (embedding) upsertMemoryVector(userId, id, embedding);
+		else db.prepare('DELETE FROM memory_vec WHERE memory_id = ?').run(BigInt(id));
+	}
+	return info.changes > 0;
 }
 
 

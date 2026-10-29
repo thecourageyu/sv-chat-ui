@@ -1,4 +1,5 @@
 <script>
+	import { base } from '$app/paths';
 	import { goto, invalidateAll } from '$app/navigation';
 	import Composer from '$lib/Composer.svelte';
 
@@ -13,7 +14,7 @@
 		busy = true;
 		error = '';
 		try {
-			const res = await fetch('/api/chats', {
+			const res = await fetch(`${base}/api/chats`, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ content })
@@ -21,7 +22,7 @@
 			if (!res.ok) throw new Error('Could not start the chat. Try again.');
 			const { id } = await res.json();
 			await invalidateAll();
-			await goto(`/chat/${id}`); // the chat page sees the unanswered message and requests the reply
+			await goto(`${base}/chat/${id}`); // the chat page sees the unanswered message and requests the reply
 		} catch (e) {
 			error = e.message;
 			busy = false;
