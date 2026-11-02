@@ -1,5 +1,6 @@
 <script>
 	import { enhance } from '$app/forms';
+	import { env } from '$env/dynamic/public';
 
 	let { data, form } = $props();
 	let mode = $state(form?.mode ?? 'login');
@@ -9,7 +10,8 @@
 <svelte:head><title>{mode === 'login' ? 'Sign in' : 'Create account'}</title></svelte:head>
 
 <main class="auth">
-	<div class="mark" aria-hidden="true">✺</div>
+	<!-- <div class="mark" aria-hidden="true">✺</div> -->
+	<div class="mark" aria-hidden="true">{env.PUBLIC_CHAT_SYMBOL ?? '✺'}</div>
 	<h1>{mode === 'login' ? 'Welcome back' : 'Create your account'}</h1>
 
 	<form

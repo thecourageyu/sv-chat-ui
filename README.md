@@ -17,19 +17,54 @@ Production: `npm run build && node --env-file=.env build`.
 - `src/lib/server/llm.js` – streams from the Anthropic Messages API (or OpenAI)
 - `src/lib/server/embeddings.js` – calls your embedding API (spec below)
 - `src/lib/server/memory.js` – summarisation + memory extraction + retrieval
+- `src/lib/server/tools.js` – external tool registry + the model tool-calling loop
 - `src/hooks.server.js` – guards every route; `/api/*` returns 401 when signed out
 - `src/routes/login` – sign in / create account (set `ALLOW_REGISTRATION=false` to close sign-ups)
-- `src/routes/(app)` – sidebar, home composer, `chat/[id]` session page
-- `src/lib/Chat.svelte` – streaming UI, Stop, Retry, markdown rendering, Summarise / Extract buttons
+- `src/routes/(app)` – sidebar, home composer, `chat/[id]` session page, `memory` page, `profile` page
+- `src/lib/Chat.svelte` – streaming UI, Stop, Retry, markdown rendering
+
+## AI profile (persona)
+The **✦ AI profile** page (`/profile`) lets you create, edit, and delete assistant personas,
+stored in the `ai_profiles` SQLite table (one per account). Mark one profile as **使用中**
+(active); its content is injected into the system prompt's `{ai_profile}` placeholder (sent to
+the LLM gateway as the `ai_profile` body key, alongside `similar_summaries` and `rolling_memory`).
 
 ## Summaries & long-term memory
-Two manual buttons (bottom of the chat): **Summarise** and **Extract memories**.
+Two buttons on the **☘ Memory & summaries** page (`/memory`): **Summarise** and **Extract memories**.
 
-- **Summarise** → `POST /api/chats/:id/summarize` — summarises the conversation with the LLM, embeds the summary, and stores it in `chat_summaries` + `summary_vec`.
-- **Extract memories** → `POST /api/chats/:id/memories` — extracts durable facts (from the latest summary, or the raw transcript), embeds each, and stores them in `memories` + `memory_vec`.
+- **Summarise** → sends today's conversation for the selected chat to the LLM, embeds the reply, and stores it in `chat_summaries` + `summary_vec`.
+- **Extract memories** → sends the user's last-7-days summaries to the LLM, embeds the extracted facts, and stores them in `memories` + `memory_vec`.
 
-On every subsequent reply, the top-K most similar memories are retrieved via vector
-search and injected into the system prompt (best-effort — a failure never blocks the reply).
+Both LLM calls also receive the 10 summaries most similar to the current question plus the latest
+memory as prompt context, so the gateway can rebuild its own prompt from them. On every subsequent
+reply the same context is injected (best-effort — a failure never blocks the reply).
+
+## External tools (model tool calling)
+The model can call external tools and receive their results back. Tool schemas live in
+`data/tools.json` (override the path with `TOOLS_FILE`) and are editable via the API below —
+each tool's `parameters` is a JSON Schema object, so you can adjust the schema freely.
+
+```json
+{
+  "name": "get_weather",
+  "description": "Get current weather for a city",
+  "endpoint": "GET https://api.example.com/weather?city={city}",
+  "headers": { "Authorization": "Bearer ..." },
+  "parameters": {
+    "type": "object",
+    "properties": { "city": { "type": "string", "description": "City name" } },
+    "required": ["city"]
+  }
+}
+```
+
+- `endpoint` is `"METHOD URL"`; `{arg}` placeholders are substituted from the arguments the model
+  supplies (unused `parameters` need not appear in the URL).
+- When a chat reply runs, `src/lib/server/tools.js` sends the tool schemas to the LLM and enters a
+  loop (bounded by `TOOL_MAX_ROUNDS`, default 4): model → tool call → execute → feed `role: tool`
+  results back → model answers or calls again. The final answer is streamed to the client as usual.
+- Tool arguments are sent as JSON to the endpoint; the endpoint's response body is returned verbatim
+  to the model. A non-2xx status or HTTP error throws and is surfaced in the reply.
 
 ## Embedding API spec
 Your embedding server must expose one endpoint:
@@ -57,6 +92,14 @@ Response: { "data": [ { "index": number, "embedding": number[] }, ... ] }
 | POST | `/api/chats/:id/memories` | extract + store long-term memories |
 | GET | `/api/memories` | list stored memories |
 | DELETE | `/api/memories/:id` | delete one memory |
+| GET | `/api/tools` | list registered tools |
+| POST | `/api/tools` | create/update a tool (schema below) |
+| GET / DELETE | `/api/tools/:name` | read / delete one tool |
+| POST | `/api/tools/run` | execute one tool: `{name, args}` → its HTTP response |
+| GET | `/api/profiles` | list AI profiles |
+| POST | `/api/profiles` | create `{name?, content?, isActive?}` |
+| GET / PATCH / DELETE | `/api/profiles/:id` | read / update `{name?, content?, isActive?}` / delete a profile |
+| POST | `/api/profiles/activate` | set active profile: `{id}` (`id` null clears) |
 
 
 ## 安裝並設置 Nginx (Ubuntu / Debian)
@@ -154,11 +197,13 @@ npm run build
 
 再將 build 目錄搬到 /var/www/slm-llm-testing, /opt/slm-llm-testing, ... (不限制, node 能編譯, nginx location 設定好即可), 
 
+```
 /var/www/slm-llm-testing/
 ├── build/              ← npm run build 的輸出
 ├── node_modules/       ← 只裝 production 依賴即可
 ├── package.json
 └── package-lock.json
+```
 
 svelte 還必須將 package.json, package-lock.json 一同打包並重新在該目錄下載依賴的套件
 

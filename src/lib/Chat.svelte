@@ -1,4 +1,5 @@
 <script>
+	import { env } from '$env/dynamic/public';		
 	import { base } from '$app/paths';
 	import { onMount, tick } from 'svelte';
 	import { invalidateAll } from '$app/navigation';
@@ -78,7 +79,7 @@
 			{:else}
 				<article class="assistant">
 					<!-- <span class="spark" class:pulse={busy && i === messages.length - 1} aria-hidden="true">✺</span> -->
-					<span class="spark" class:pulse={busy && i === messages.length - 1} aria-hidden="true">☘</span>
+					<span class="spark" class:pulse={busy && i === messages.length - 1} aria-hidden="true">{env.PUBLIC_CHAT_SYMBOL ?? '☘'}</span>
 					<div class="md">
 						{#if m.content}{@html render(m.content)}{:else}<span class="thinking">Thinking…</span>{/if}
 					</div>

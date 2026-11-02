@@ -71,6 +71,19 @@ CREATE TABLE IF NOT EXISTS memories (
 	created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 CREATE INDEX IF NOT EXISTS memories_user ON memories(user_id, id);
+
+-- AI profiles: user-authored system-prompt persona, injected as {ai_profile}.
+-- One active profile per user (managed in code, not via DB constraint).
+CREATE TABLE IF NOT EXISTS ai_profiles (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	name TEXT NOT NULL DEFAULT 'AI Profile',
+	content TEXT NOT NULL DEFAULT '',
+	is_active INTEGER NOT NULL DEFAULT 0,
+	created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+	updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS ai_profiles_user ON ai_profiles(user_id, id);
 `);
 
 // Vector tables for the two features. Dimension is fixed at first creation; keep
@@ -268,6 +281,64 @@ export function searchSimilarSummaries(userId, embedding, limit = 10) {
 			 ORDER BY v.distance`
 		)
 		.all(JSON.stringify(embedding), BigInt(userId), limit);
+}
+
+// ---- AI profiles ----
+
+export const listProfiles = (userId) =>
+	db.prepare('SELECT id, name, content, is_active, created_at, updated_at FROM ai_profiles WHERE user_id = ? ORDER BY id').all(userId);
+
+export const getProfile = (id, userId) =>
+	db.prepare('SELECT id, name, content, is_active, created_at, updated_at FROM ai_profiles WHERE id = ? AND user_id = ?').get(id, userId);
+
+/** The active profile's content, or '' when none is set. */
+export function getActiveProfileContent(userId) {
+	return db.prepare('SELECT content FROM ai_profiles WHERE user_id = ? AND is_active = 1 ORDER BY id LIMIT 1').get(userId)?.content ?? '';
+}
+
+export function saveProfile(userId, { name = 'AI Profile', content = '', isActive = false } = {}) {
+	// A newly created profile can also be made the active one.
+	if (isActive) db.prepare('UPDATE ai_profiles SET is_active = 0 WHERE user_id = ?').run(userId);
+	const info = db
+		.prepare('INSERT INTO ai_profiles (user_id, name, content, is_active) VALUES (?, ?, ?, ?)')
+		.run(userId, name, content, isActive ? 1 : 0);
+	return Number(info.lastInsertRowid);
+}
+
+export function updateProfile(id, userId, { name, content, isActive }) {
+	const current = getProfile(id, userId);
+	if (!current) return false;
+	if (isActive && !current.is_active) {
+		db.prepare('UPDATE ai_profiles SET is_active = 0 WHERE user_id = ?').run(userId);
+	}
+	db.prepare(
+		`UPDATE ai_profiles
+		 SET name = COALESCE(?, name),
+		     content = COALESCE(?, content),
+		     is_active = COALESCE(?, is_active),
+		     updated_at = unixepoch()
+		 WHERE id = ? AND user_id = ?`
+	).run(
+		name ?? null,
+		content ?? null,
+		isActive == null ? null : (isActive ? 1 : 0),
+		id,
+		userId
+	);
+	return true;
+}
+
+/** Delete a profile and, if it was active, promote none (caller may re-activate another). */
+export function deleteProfile(id, userId) {
+	return db.prepare('DELETE FROM ai_profiles WHERE id = ? AND user_id = ?').run(id, userId).changes > 0;
+}
+
+/** Make exactly one profile active (id may be null to clear the active profile). */
+export function activateProfile(id, userId) {
+	db.prepare('UPDATE ai_profiles SET is_active = 0 WHERE user_id = ?').run(userId);
+	if (id != null) {
+		db.prepare('UPDATE ai_profiles SET is_active = 1 WHERE id = ? AND user_id = ?').run(id, userId);
+	}
 }
 
 // ---- Vector helpers (embedding is a number[]) ----

@@ -1,4 +1,5 @@
 <script>
+	import { env } from '$env/dynamic/public';
 	import { base } from '$app/paths';
 	import { goto, invalidateAll } from '$app/navigation';
 	import Composer from '$lib/Composer.svelte';
@@ -34,7 +35,8 @@
 
 <section class="home">
 	<!-- <h1><span aria-hidden="true">✺</span> {greeting}, {data.user.email.split('@')[0]}</h1> -->
-	<h1><span aria-hidden="true">☘</span> {greeting}, {data.user.email.split('@')[0]}</h1>
+	<!-- <h1><span aria-hidden="true">☘</span> {greeting}, {data.user.email.split('@')[0]}</h1> -->
+	<h1><span aria-hidden="true">{env.PUBLIC_CHAT_SYMBOL ?? '☘'}</span> {greeting}, {data.user.email.split('@')[0]}</h1>
 	
 	<div class="box">
 		<Composer onsend={start} {busy} placeholder="What's on your mind?" />

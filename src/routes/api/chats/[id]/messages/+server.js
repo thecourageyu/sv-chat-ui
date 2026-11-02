@@ -1,9 +1,9 @@
 import { error } from '@sveltejs/kit';
-import { getChat, getMessages, addMessage, getLatestSummary } from '$lib/server/db.js';
+import { getChat, getMessages, addMessage, getLatestMemory, getActiveProfileContent } from '$lib/server/db.js';
 import { streamReply } from '$lib/server/llm.js';
-import { getLatestMemory } from '$lib/server/db.js';
 // import { retrieveMemories, retrieveSimilarSummaries, retrieveLatestMemories } from '$lib/server/memory.js';
 import { retrieveSimilarSummaries } from '$lib/server/memory.js';
+import { listTools, runToolLoop } from '$lib/server/tools.js';
 
 /**
  * Send a message and stream the model's reply as plain text.
@@ -32,6 +32,7 @@ export async function POST({ params, request, locals }) {
 				let suffix = '';
 				let similarSummaries = [];
 				let rollingMemory = null;
+				const aiProfile = getActiveProfileContent(locals.user.id);
 				try {
 					const lastUser = [...history].reverse().find((m) => m.role === 'user')?.content ?? '';
 					// const memories = await retrieveMemories(locals.user.id, lastUser, 5);
@@ -58,10 +59,27 @@ export async function POST({ params, request, locals }) {
 				}
 
 				// for await (const chunk of streamReply(history, ac.signal, { systemSuffix: suffix, similarSummaries, rollingMemory })) {
-				for await (const chunk of streamReply(history, ac.signal, { systemSuffix: suffix, similarSummaries, rollingMemory })) {
+				const tools = listTools();
+				// if (tools.length) {
+				// 	// With tools configured, resolve the reply through the tool loop,
+				// 	// then stream the final answer as a single chunk.
+				// 	const { content: finalAnswer, toolResults } = await runToolLoop({
+				// 		messages: history,
+				// 		system: suffix,
+				// 		context: { similarSummaries, rollingMemory, aiProfile }
+				// 	});
+				// 	if (toolResults.length) {
+				// 		// Optional: append a compact tool trace for transparency.
+				// 		// finalAnswer += '\n\n<!-- tool calls: ' + toolResults.map((t) => t.name).join(', ') + ' -->';
+				// 	}
+				// 	full = finalAnswer;
+				// 	if (!cancelled) controller.enqueue(enc.encode(finalAnswer));
+				// } else {
+				for await (const chunk of streamReply(history, ac.signal, { systemSuffix: suffix, similarSummaries, rollingMemory, aiProfile })) {
 					full += chunk;
 					if (!cancelled) controller.enqueue(enc.encode(chunk));
 				}
+				// }
 			} catch (e) {
 				if (!cancelled) controller.enqueue(enc.encode('\u0000' + (e?.message ?? 'Something went wrong')));
 			} finally {

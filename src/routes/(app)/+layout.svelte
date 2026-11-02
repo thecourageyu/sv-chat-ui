@@ -1,5 +1,7 @@
 <script>
+	
 	import { base } from '$app/paths';
+	import { env } from '$env/dynamic/public';
 	import { page } from '$app/state';
 	import { goto, invalidateAll } from '$app/navigation';
 
@@ -22,7 +24,8 @@
 		<!-- <a class="new" href={`${base}/`} onclick={() => (open = false)}>＋ New chat</a>
 		<a class="new" href={`${base}/memory`} onclick={() => (open = false)}>☘ Memory &amp; summaries</a> -->
 		<a class="new" href={`${base}/`} onclick={() => (open = false)}>＋ New chat</a>
-		<a class="new" href={`${base}/memory`} onclick={() => (open = false)}>☘ Memory &amp; summaries</a>
+		<a class="new" href={`${base}/memory`} onclick={() => (open = false)}>{env.PUBLIC_MEMORY_SYMBOL ?? '𖦹'} Memory &amp; summaries</a>
+		<a class="new" href={`${base}/profile`} onclick={() => (open = false)}>{env.PUBLIC_PROFILE_SYMBOL ?? '☀'} AI profile</a>
 
 
 		<nav aria-label="Chats">
@@ -40,7 +43,7 @@
 
 		<footer>
 			<span title={data.user.email}>{data.user.email}</span>
-			<form method="POST" action="/logout"><button>Sign out</button></form>
+			<form method="POST" action={`${base}/logout`}><button>Sign out</button></form>
 		</footer>
 	</aside>
 
