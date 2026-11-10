@@ -1,0 +1,39 @@
+# syntax=docker/dockerfile:1
+
+# Node 版本可在 build 時覆蓋:docker build --build-arg NODE_VERSION=24.22.2 ...
+ARG NODE_VERSION=24.22.0
+FROM node:${NODE_VERSION}-alpine
+
+# tini:PID 1,轉發訊號;bash:entrypoint 用到 wait -n;nginx:反向代理
+RUN apk add --no-cache nginx tini bash
+
+# 專案原始碼放在 /app。
+# 做法 A(預設):執行時由 volume 掛載到 /app(k8s 的 PVC / hostPath,或 docker run -v)
+# 做法 B:改成打包進映像檔,取消下面兩行註解
+# WORKDIR /app
+# COPY . /app
+#WORKDIR /app
+#WORKDIR /mnt/yuzhe/projects/sv-chat-ui
+WORKDIR /var/www/sv-chat-ui
+
+# alpine 的 nginx 會載入 /etc/nginx/http.d/*.conf
+# nginx.conf 只有 server{...} 區塊，僅取代 /etc/nginx/http.d/default.conf 即可
+# 若包含完整設定（有 events {}、http {}），則取代 /etc/nginx/nginx.conf
+COPY nginx.conf /etc/nginx/http.d/default.conf
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# node 只在容器內部監聽,對外只開 nginx 的 80
+ENV NODE_ENV=production \
+    HOST=127.0.0.1 \
+    PORT=3000 \
+    PROJ_DIR=/mnt/yuzhe/projects/sv-chat-ui \
+    APP_DIR=/var/www/sv-chat-ui \ 
+    ORIGIN=http://service123.com
+#    APP_DIR=/app
+
+# ORIGIN 可在容器執行時提供,且要與瀏覽器實際開啟的網址一致,例如:
+#   -e ORIGIN=http://service123.com
+
+EXPOSE 80
+ENTRYPOINT ["/sbin/tini", "--", "/entrypoint.sh"]

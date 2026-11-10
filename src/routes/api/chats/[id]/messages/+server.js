@@ -1,3 +1,8 @@
+import { env } from '$env/dynamic/private';
+
+const parsed = parseFloat(env.SUMMARY_SIMILARITY_THRESHOLD ?? '');
+const SIMILARITY_THRESHOLD = Number.isFinite(parsed) ? parsed : 0.9;
+
 import { error } from '@sveltejs/kit';
 import { getChat, getMessages, addMessage, getLatestMemory, getActiveProfileContent } from '$lib/server/db.js';
 import { streamReply } from '$lib/server/llm.js';
@@ -44,7 +49,7 @@ export async function POST({ params, request, locals }) {
 
 					// Passed to the LLM gateway as raw keys (not baked into the
 					// prompt here) so it can rebuild the context itself.
-					similarSummaries = await retrieveSimilarSummaries(locals.user.id, lastUser, 10);
+					similarSummaries = await retrieveSimilarSummaries(locals.user.id, lastUser, 5);
 					// const rolling = getLatestSummary(locals.user.id, 'rolling');
 					// rollingMemory = rolling?.content ?? null;
 
@@ -75,6 +80,9 @@ export async function POST({ params, request, locals }) {
 				// 	full = finalAnswer;
 				// 	if (!cancelled) controller.enqueue(enc.encode(finalAnswer));
 				// } else {
+
+			
+				similarSummaries = similarSummaries.filter((s) => s.similarity > SIMILARITY_THRESHOLD);
 				for await (const chunk of streamReply(history, ac.signal, { systemSuffix: suffix, similarSummaries, rollingMemory, aiProfile })) {
 					full += chunk;
 					if (!cancelled) controller.enqueue(enc.encode(chunk));

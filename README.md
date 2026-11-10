@@ -102,23 +102,42 @@ Response: { "data": [ { "index": number, "embedding": number[] }, ... ] }
 | POST | `/api/profiles/activate` | set active profile: `{id}` (`id` null clears) |
 
 
-## 安裝並設置 Nginx (Ubuntu / Debian)
+<a href="https://nodejs.org/en/download"><h2>NodeJS download</h2></a>
 
-- 1. 安裝
+``` 
+# Download and install nvm:
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.41.0/install.sh | bash
+
+# in lieu of restarting the shell
+\. "$HOME/.nvm/nvm.sh"
+
+# Download and install Node.js:
+nvm install 24
+
+# Verify the Node.js version:
+node -v # Should print "v24.22.2".
+
+# Verify npm version:
+npm -v # Should print "11.19.1".
+```
+
+
+## Nginx (Ubuntu / Debian)
+
+- Install nginx
 ```
 sudo apt update
 sudo apt install -y nginx
 ```
-- 2-1. 啟動並設為開機自動執行，看到 active (running) 就表示成功，按 q 離開。
+
+- 啟動並設為開機自動執行，看到 active (running) 就表示成功，按 q 離開。
 ```
 sudo systemctl enable --now nginx
 sudo systemctl status nginx
 ```
 
-- 2-2. 若在 k8s 環境 (不會有 systemctl)
+- 若在 k8s 環境 (或無 systemctl)
 ``` 
-apt update && apt install -y nginx
-
 # 檢查設定
 nginx -t
 
@@ -132,13 +151,12 @@ nginx -s reload
 nginx -s stop
 ```
 
-- 3. 本機測試 (應該會看到 HTTP/1.1 200 OK)
+- 本機測試 (應該會看到 HTTP/1.1 200 OK)
 ```
 curl -I http://localhost
 ```
 
-4. 防火牆（如果有用 ufw）
-
+- 防火牆（如果有用 ufw）
 先放行 SSH，避免把自己鎖在外面：
 ```
 sudo ufw allow 22/tcp
@@ -147,26 +165,104 @@ sudo ufw enable
 sudo ufw status
 ```
 
-5. 外部測試
-
-利用其他裝置開啟 http://你的公網IP，應該會看到 Welcome to nginx 頁面。
+- 外部測試
+利用其他裝置開啟 http://公網IP，應該會看到 Welcome to nginx 頁面。
 看不到的話，通常是路由器或雲端安全群組沒有開放 80 port。
 
-6. 建立網站資料夾與測試頁
+- 建立網站資料夾與測試頁
 ```
 sudo mkdir -p /var/www/myapp
 echo "<h1>Hello from myapp</h1>" | sudo tee /var/www/myapp/index.html
 sudo chown -R www-data:www-data /var/www/myapp
 ```
 
-7. 設置 base path 及打包網頁
+## Build web service
+
+- 設置 base path 及打包網頁
 ```
 sudo nano /etc/nginx/sites-available/yzk
 ```
 
-前端 build 前要加上 base path (若非僅有 domain name)
+- 建立網站設定檔（先只做 HTTP，HTTPS 之後再加）
 
-```vite.config.js
+nginx /etc/nginx/sites-available/slm-llm-testing
+
+```nginx
+server {
+    listen 80;
+    server_name service.com;
+
+    # root /var/www/build;
+    # index index.html;  # svelteKit 用 node 啟動 非靜態頁面
+
+    location /website/slm-llm-testing/ {
+        # try_files $uri $uri/ /index.html;
+
+        proxy_pass http://127.0.0.1:3000;   # 不加結尾斜線，完整路徑原樣傳給 node
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_connect_timeout 10s;
+        proxy_send_timeout    300s;
+        proxy_read_timeout    300s;   # 依 LLM 最長回應時間調整
+
+        proxy_buffering off;          # 串流 (SSE) 回應需要,否則會被 nginx 暫存
+    }
+
+    
+}
+```
+
+- 若是 Ingress (k8s) 拿掉前綴, 把前綴補在 proxy_pass, base path 仍然要加
+
+```nginx
+server {
+    listen 80;
+    server_name service.com _;
+
+    location / {
+        # try_files $uri $uri/ /index.html;
+
+        proxy_pass http://127.0.0.1:3000/website/slm-llm-testing/;  # 加結尾斜線 
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_connect_timeout 10s;
+        proxy_send_timeout    300s;
+        proxy_read_timeout    300s;   # 依 LLM 最長回應時間調整
+
+        proxy_buffering off;          # 串流 (SSE) 回應需要,否則會被 nginx 暫存
+    }
+
+}
+```
+
+
+- 啟用並重載：
+
+```
+sudo ln -s /etc/nginx/sites-available/slm-llm-testing /etc/nginx/sites-enabled/
+sudo rm /etc/nginx/sites-enabled/default
+sudo nginx -s reload  # 若無 systemctl
+sudo systemctl reload nginx
+sudo nginx -t
+grep -n "sites-enabled\|conf.d" /etc/nginx/nginx.conf
+```
+
+nginx -t 必須顯示 syntax is ok 和 test is successful，再重載。
+
+
+
+- 前端框架，若非僅有 domain name 還需要加上 base path 
+
+vite.config.js
+``` 
 export default defineConfig({
   plugins: [
     sveltekit(),
@@ -177,8 +273,7 @@ export default defineConfig({
 ```
 
 但 svelteKit 使用 svelte.config.js 設定，vite.config.js 的 base 可以刪除
-
-``` svelte.config.js
+```
 export default {
 	preprocess: vitePreprocess(),
 	kit: { 
@@ -190,10 +285,11 @@ export default {
 };
 ```
 
-build 並進行本機驗證
+- build 並進行本機驗證
 ```
 npm run build
 ```
+
 
 再將 build 目錄搬到 /var/www/slm-llm-testing, /opt/slm-llm-testing, ... (不限制, node 能編譯, nginx location 設定好即可), 
 
@@ -215,91 +311,23 @@ cd /var/www/slm-llm-testing
 sudo npm ci --omit=dev
 ```
 
-node 實際上只收到 nginx 轉過來的請求，如 http://127.0.0.1:3000，不知道外面用戶是用 ORIGIN 連進來的。
+## Start the web service
+node 實際上只收到 nginx 轉過來的請求 (反向代理)，如 http://127.0.0.1:3000，不知道外面用戶是用 ORIGIN 連進來的。
 
-瀏覽器訪問 http://localhost:3000 測試
+瀏覽器訪問 http://localhost:3000 測試 (HOST=127.0.0.1 只監聽本機迴路 loopback)
+```
 ORIGIN=http://localhost:3000 HOST=127.0.0.1 PORT=3000 node --env-file=.env build
-
-瀏覽器訪問 http://service.com 測試
+```
+瀏覽器訪問 http://service.com 測試 (HOST=0.0.0.0 監聽所有所有網路介面)
+```
 ORIGIN=http://service.com HOST=0.0.0.0 PORT=3000 node --env-file=.env build
-
+```
 不寫死 ORIGIN
+```
 PROTOCOL_HEADER=x-forwarded-proto HOST_HEADER=x-forwarded-host node build
-
-7. 建立網站設定檔（先只做 HTTP，HTTPS 之後再加）
-
-```nginx /etc/nginx/sites-available/slm-llm-testing
-server {
-    listen 80;
-    server_name service.com;
-
-    # root /var/www/build;
-    # index index.html;  # svelteKit 用 node 啟動 非靜態頁面
-
-    location /website/slm-llm-testing/ {
-        # try_files $uri $uri/ /index.html;
-
-        proxy_pass http://127.0.0.1:3000;   # 不加結尾斜線，完整路徑原樣傳給 node
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    
-}
 ```
 
-若是 Ingress (k8s) 拿掉前綴, 把前綴補在 proxy_pass, base path 仍然要加
-
-```
-server {
-    listen 80;
-    server_name service.com _;
-
-    # root /var/www/build;
-    # index index.html;
-
-    #location /website/slm-llm-testing/ {
-    location / {
-        # try_files $uri $uri/ /index.html;
-
-        #proxy_pass http://127.0.0.1:3000;   # 不加結尾斜線
-        proxy_pass http://127.0.0.1:3000/website/slm-llm-testing/;  # 加結尾斜線 
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-}
-```
-
-
-啟用並重載：
-
-```
-sudo ln -s /etc/nginx/sites-available/slm-llm-testing /etc/nginx/sites-enabled/
-sudo nginx -s reload
-sudo nginx -t
-grep -n "sites-enabled\|conf.d" /etc/nginx/nginx.conf
-```
-
-
-
-- 8. 啟用設定、停用預設站台、重載
-```
-sudo ln -s /etc/nginx/sites-available/myapp /etc/nginx/sites-enabled/
-sudo rm /etc/nginx/sites-enabled/default
-sudo nginx -t
-sudo systemctl reload nginx
-```
-nginx -t 必須顯示 syntax is ok 和 test is successful，再重載。
-
-
-9. 驗證
+- 驗證
 
 重新整理 http://你的公網IP 或 http://你的網域，應該會看到 Hello from myapp。
 
